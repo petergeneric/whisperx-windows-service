@@ -110,6 +110,13 @@ public class TranscriptionWorker : BackgroundService
                 process.StartInfo.EnvironmentVariables["PATH"] = $"{installDir};{currentPath}";
             }
 
+            // Set cache directories for uvx and Hugging Face models
+            if (!string.IsNullOrEmpty(_options.CacheDirectory))
+            {
+                process.StartInfo.EnvironmentVariables["UV_CACHE_DIR"] = _options.CacheDirectory;
+                process.StartInfo.EnvironmentVariables["HF_HOME"] = Path.Combine(_options.CacheDirectory, "huggingface");
+            }
+
             var stdout = new StringBuilder();
             var stderr = new StringBuilder();
 

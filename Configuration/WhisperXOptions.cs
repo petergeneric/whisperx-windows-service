@@ -9,6 +9,7 @@ public class WhisperXOptions
     public string UvxPath { get; init; } = "uvx";
     public string TorchBackend { get; init; } = "auto";
     public string TempDirectory { get; init; } = @"C:\temp\whisperx-api";
+    public string CacheDirectory { get; init; } = @"C:\temp\whisperx-api\cache";
     public int JobTimeoutMinutes { get; init; } = 30;
     public string? ApiKey { get; init; }
     public Dictionary<string, TranscriptionProfile> Profiles { get; init; } = new()

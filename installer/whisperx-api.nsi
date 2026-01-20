@@ -134,8 +134,9 @@ Section "Main Application" SecMain
         $$config.WhisperX.UvxPath = \"$INSTDIR\uvx.exe\"; \
         $$config | ConvertTo-Json -Depth 10 | Set-Content \"$INSTDIR\appsettings.json\""'
 
-    ; Create temp directory
+    ; Create temp and cache directories
     CreateDirectory "C:\temp\whisperx-api"
+    CreateDirectory "C:\temp\whisperx-api\cache"
 
     ; Create the Windows Service (runs as Local System)
     DetailPrint "Creating Windows Service..."
@@ -215,8 +216,8 @@ Section "Uninstall"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
 
-    ; Remove temp directory (ask user first)
-    MessageBox MB_YESNO|MB_ICONQUESTION "Remove temporary files in C:\temp\whisperx-api?" IDNO SkipTempRemoval
+    ; Remove temp and cache directories (ask user first)
+    MessageBox MB_YESNO|MB_ICONQUESTION "Remove temporary files and model cache in C:\temp\whisperx-api?$\n$\nThis includes downloaded AI models which may be several GB." IDNO SkipTempRemoval
         RMDir /r "C:\temp\whisperx-api"
     SkipTempRemoval:
 
