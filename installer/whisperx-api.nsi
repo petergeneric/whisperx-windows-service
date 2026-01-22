@@ -126,6 +126,11 @@ Section "Main Application" SecMain
     File "..\appsettings.json"
     File "README.txt"
 
+    ; Install Parakeet transcription script
+    SetOutPath "$INSTDIR\Scripts"
+    File "..\Scripts\parakeet_transcribe.py"
+    SetOutPath "$INSTDIR"
+
     ; Update config with port number and local uvx path
     DetailPrint "Configuring service..."
     nsExec::ExecToLog 'powershell -ExecutionPolicy Bypass -Command "\
@@ -214,6 +219,11 @@ Section "Uninstall"
     Delete "$INSTDIR\appsettings.json"
     Delete "$INSTDIR\README.txt"
     Delete "$INSTDIR\uninstall.exe"
+
+    ; Remove Scripts directory
+    Delete "$INSTDIR\Scripts\parakeet_transcribe.py"
+    RMDir "$INSTDIR\Scripts"
+
     RMDir "$INSTDIR"
 
     ; Remove temp and cache directories (ask user first)

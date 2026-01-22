@@ -752,12 +752,14 @@ The API can be configured via `appsettings.json`:
 {
   "WhisperX": {
     "UvxPath": "uvx",
-    "PyTorchIndexUrl": "https://download.pytorch.org/whl/cu128",
-    "AdditionalPackages": ["torch"],
+    "TorchBackend": "auto",
     "TempDirectory": "C:\\temp\\whisperx-api",
+    "CacheDirectory": "C:\\temp\\whisperx-api\\cache",
     "JobTimeoutMinutes": 30,
+    "ParakeetScriptPath": "Scripts\\parakeet_transcribe.py",
     "Profiles": {
       "default": {
+        "Engine": "whisperx",
         "Model": "distil-large-v3.5",
         "Device": "cuda",
         "ComputeType": "float16",
@@ -766,13 +768,21 @@ The API can be configured via `appsettings.json`:
         "VadMethod": "silero"
       },
       "large-v3": {
+        "Engine": "whisperx",
         "Model": "large-v3"
       },
       "large-v2": {
+        "Engine": "whisperx",
         "Model": "large-v2"
       },
       "distil-large-v3": {
+        "Engine": "whisperx",
         "Model": "distil-large-v3"
+      },
+      "parakeet": {
+        "Engine": "parakeet",
+        "ParakeetModel": "nvidia/parakeet-tdt-0.6b-v3",
+        "Language": "en"
       }
     }
   },
@@ -782,22 +792,39 @@ The API can be configured via `appsettings.json`:
 
 ### Built-in Profiles
 
-| Profile | Model | Description |
-|---------|-------|-------------|
-| `default` | `distil-large-v3.5` | Fast distilled model, good balance of speed and accuracy |
-| `large-v3` | `large-v3` | Full model, best accuracy |
-| `large-v2` | `large-v2` | Previous full model version |
-| `distil-large-v3` | `distil-large-v3` | Distilled v3 model |
+| Profile | Engine | Model | Description |
+|---------|--------|-------|-------------|
+| `default` | `whisperx` | `distil-large-v3.5` | Fast distilled model, good balance of speed and accuracy |
+| `large-v3` | `whisperx` | `large-v3` | Full model, best accuracy |
+| `large-v2` | `whisperx` | `large-v2` | Previous full model version |
+| `distil-large-v3` | `whisperx` | `distil-large-v3` | Distilled v3 model |
+| `parakeet` | `parakeet` | `nvidia/parakeet-tdt-0.6b-v3` | NVIDIA Parakeet NeMo-based ASR, handles long audio via chunking |
 
 ### Profile Options
+
+#### Common Options
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `Engine` | Transcription engine | `whisperx` (default), `parakeet` |
+| `Language` | Language code | `en`, `es`, `fr`, `de`, etc. |
+
+#### WhisperX Options (Engine = "whisperx")
 
 | Option | Description | Example |
 |--------|-------------|---------|
 | `Model` | Whisper model name | `distil-large-v3.5`, `large-v3`, `medium`, `small` |
 | `Device` | Compute device | `cuda`, `cpu` |
 | `ComputeType` | Precision | `float16`, `int8`, `float32` |
-| `Language` | Language code | `en`, `es`, `fr`, `de`, etc. |
 | `AlignModel` | Alignment model | `WAV2VEC2_ASR_LARGE_LV60K_960H` |
 | `VadMethod` | Voice activity detection | `silero`, `pyannote` |
 | `Temperature` | Sampling temperature | `0.0`, `0.2`, `0.8` |
 | `InitialPrompt` | Prompt to condition transcription | `"Technical vocabulary: API, SDK"` |
+
+#### Parakeet Options (Engine = "parakeet")
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `ParakeetModel` | NVIDIA Parakeet model | `nvidia/parakeet-tdt-0.6b-v3` |
+
+**Note:** Parakeet uses chunked processing (5-minute chunks with 5-second overlap) to handle multi-hour audio files reliably on GPUs with limited VRAM (e.g., 12GB RTX 4070).

@@ -52,7 +52,7 @@ public class TranscriptionWorker : BackgroundService
 
         try
         {
-            var result = await RunWhisperXAsync(job, stoppingToken);
+            var result = await RunTranscriptionAsync(job, stoppingToken);
             job.Result = result;
             job.Status = JobStatus.Completed;
             _logger.LogInformation("Job {JobId} completed successfully", job.Id);
@@ -76,13 +76,13 @@ public class TranscriptionWorker : BackgroundService
         }
     }
 
-    private async Task<JsonDocument> RunWhisperXAsync(Job job, CancellationToken stoppingToken)
+    private async Task<JsonDocument> RunTranscriptionAsync(Job job, CancellationToken stoppingToken)
     {
         var profile = _jobManager.GetProfile(job.Profile);
         var outputDir = Path.Combine(_options.TempDirectory, job.Id.ToString());
         Directory.CreateDirectory(outputDir);
 
-        // Convert .flac to .wav using ffmpeg with soxr resampler
+        // Convert .flac to .wav using ffmpeg with soxr resampler (shared for all engines)
         string? convertedWavPath = null;
         var inputFile = job.TempFilePath!;
         if (Path.GetExtension(inputFile).Equals(".flac", StringComparison.OrdinalIgnoreCase))
@@ -94,94 +94,12 @@ public class TranscriptionWorker : BackgroundService
 
         try
         {
-            var arguments = BuildUvxArguments(inputFile, job, profile, outputDir);
-            _logger.LogDebug("Running: {Executable} {Arguments}", _options.UvxPath, arguments);
-
-            // Get the directory containing uvx.exe (and ffmpeg.exe)
-            var installDir = Path.GetDirectoryName(_options.UvxPath) ?? "";
-
-            using var process = new Process
+            // Dispatch based on engine type
+            return profile.Engine.ToLowerInvariant() switch
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = _options.UvxPath,
-                    Arguments = arguments,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                }
+                "parakeet" => await RunParakeetAsync(inputFile, profile, outputDir, stoppingToken),
+                _ => await RunWhisperXAsync(inputFile, job, profile, outputDir, stoppingToken)
             };
-
-            // Add install directory to PATH so ffmpeg can be found
-            if (!string.IsNullOrEmpty(installDir))
-            {
-                var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-                process.StartInfo.EnvironmentVariables["PATH"] = $"{installDir};{currentPath}";
-            }
-
-            // Set cache directories for uvx and Hugging Face models
-            if (!string.IsNullOrEmpty(_options.CacheDirectory))
-            {
-                process.StartInfo.EnvironmentVariables["UV_CACHE_DIR"] = _options.CacheDirectory;
-                process.StartInfo.EnvironmentVariables["HF_HOME"] = Path.Combine(_options.CacheDirectory, "huggingface");
-            }
-
-            var stdout = new StringBuilder();
-            var stderr = new StringBuilder();
-
-            process.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data != null)
-                {
-                    stdout.AppendLine(e.Data);
-                    _logger.LogDebug("[whisperx] {Output}", e.Data);
-                }
-            };
-
-            process.ErrorDataReceived += (_, e) =>
-            {
-                if (e.Data != null)
-                {
-                    stderr.AppendLine(e.Data);
-                    _logger.LogDebug("[whisperx:err] {Output}", e.Data);
-                }
-            };
-
-            process.Start();
-            _jobManager.SetCurrentProcess(process);
-
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            // Wait for process to exit or cancellation
-            while (!process.HasExited)
-            {
-                if (stoppingToken.IsCancellationRequested)
-                {
-                    _logger.LogWarning("Cancellation requested, killing whisperx process");
-                    process.Kill(entireProcessTree: true);
-                    throw new OperationCanceledException();
-                }
-                await Task.Delay(100, CancellationToken.None);
-            }
-
-            await process.WaitForExitAsync(CancellationToken.None);
-
-            if (process.ExitCode != 0)
-            {
-                throw new Exception($"whisperx exited with code {process.ExitCode}: {stderr}");
-            }
-
-            // Find and parse the JSON output file
-            var jsonFiles = Directory.GetFiles(outputDir, "*.json");
-            if (jsonFiles.Length == 0)
-            {
-                throw new Exception("whisperx did not produce JSON output");
-            }
-
-            var jsonContent = await File.ReadAllTextAsync(jsonFiles[0], stoppingToken);
-            return JsonDocument.Parse(jsonContent);
         }
         finally
         {
@@ -212,6 +130,190 @@ public class TranscriptionWorker : BackgroundService
                 }
             }
         }
+    }
+
+    private async Task<JsonDocument> RunWhisperXAsync(string inputFile, Job job, TranscriptionProfile profile, string outputDir, CancellationToken stoppingToken)
+    {
+        var arguments = BuildWhisperXArguments(inputFile, job, profile, outputDir);
+        _logger.LogDebug("Running: {Executable} {Arguments}", _options.UvxPath, arguments);
+
+        // Get the directory containing uvx.exe (and ffmpeg.exe)
+        var installDir = Path.GetDirectoryName(_options.UvxPath) ?? "";
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = _options.UvxPath,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+
+        // Add install directory to PATH so ffmpeg can be found
+        if (!string.IsNullOrEmpty(installDir))
+        {
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            process.StartInfo.EnvironmentVariables["PATH"] = $"{installDir};{currentPath}";
+        }
+
+        // Set cache directories for uvx and Hugging Face models
+        if (!string.IsNullOrEmpty(_options.CacheDirectory))
+        {
+            process.StartInfo.EnvironmentVariables["UV_CACHE_DIR"] = _options.CacheDirectory;
+            process.StartInfo.EnvironmentVariables["HF_HOME"] = Path.Combine(_options.CacheDirectory, "huggingface");
+        }
+
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stdout.AppendLine(e.Data);
+                _logger.LogDebug("[whisperx] {Output}", e.Data);
+            }
+        };
+
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stderr.AppendLine(e.Data);
+                _logger.LogDebug("[whisperx:err] {Output}", e.Data);
+            }
+        };
+
+        process.Start();
+        _jobManager.SetCurrentProcess(process);
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        // Wait for process to exit or cancellation
+        while (!process.HasExited)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("Cancellation requested, killing whisperx process");
+                process.Kill(entireProcessTree: true);
+                throw new OperationCanceledException();
+            }
+            await Task.Delay(100, CancellationToken.None);
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None);
+
+        if (process.ExitCode != 0)
+        {
+            throw new Exception($"whisperx exited with code {process.ExitCode}: {stderr}");
+        }
+
+        // Find and parse the JSON output file
+        var jsonFiles = Directory.GetFiles(outputDir, "*.json");
+        if (jsonFiles.Length == 0)
+        {
+            throw new Exception("whisperx did not produce JSON output");
+        }
+
+        var jsonContent = await File.ReadAllTextAsync(jsonFiles[0], stoppingToken);
+        return JsonDocument.Parse(jsonContent);
+    }
+
+    private async Task<JsonDocument> RunParakeetAsync(string inputFile, TranscriptionProfile profile, string outputDir, CancellationToken stoppingToken)
+    {
+        var arguments = BuildParakeetArguments(inputFile, profile, outputDir);
+        _logger.LogDebug("Running: {Executable} {Arguments}", _options.UvxPath, arguments);
+
+        // Get the directory containing uvx.exe
+        var installDir = Path.GetDirectoryName(_options.UvxPath) ?? "";
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = _options.UvxPath,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+
+        // Add install directory to PATH
+        if (!string.IsNullOrEmpty(installDir))
+        {
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            process.StartInfo.EnvironmentVariables["PATH"] = $"{installDir};{currentPath}";
+        }
+
+        // Set cache directories for uvx and Hugging Face models (same as whisperx)
+        if (!string.IsNullOrEmpty(_options.CacheDirectory))
+        {
+            process.StartInfo.EnvironmentVariables["UV_CACHE_DIR"] = _options.CacheDirectory;
+            process.StartInfo.EnvironmentVariables["HF_HOME"] = Path.Combine(_options.CacheDirectory, "huggingface");
+        }
+
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stdout.AppendLine(e.Data);
+                _logger.LogDebug("[parakeet] {Output}", e.Data);
+            }
+        };
+
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stderr.AppendLine(e.Data);
+                _logger.LogDebug("[parakeet:err] {Output}", e.Data);
+            }
+        };
+
+        process.Start();
+        _jobManager.SetCurrentProcess(process);
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        // Wait for process to exit or cancellation
+        while (!process.HasExited)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("Cancellation requested, killing parakeet process");
+                process.Kill(entireProcessTree: true);
+                throw new OperationCanceledException();
+            }
+            await Task.Delay(100, CancellationToken.None);
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None);
+
+        if (process.ExitCode != 0)
+        {
+            throw new Exception($"parakeet exited with code {process.ExitCode}: {stderr}");
+        }
+
+        // Find and parse the JSON output file
+        var jsonFiles = Directory.GetFiles(outputDir, "*.json");
+        if (jsonFiles.Length == 0)
+        {
+            throw new Exception("parakeet did not produce JSON output");
+        }
+
+        var jsonContent = await File.ReadAllTextAsync(jsonFiles[0], stoppingToken);
+        return JsonDocument.Parse(jsonContent);
     }
 
     private async Task ConvertFlacToWavAsync(string inputPath, string outputPath, CancellationToken stoppingToken)
@@ -274,7 +376,7 @@ public class TranscriptionWorker : BackgroundService
         _logger.LogInformation("Successfully converted to WAV: {Output}", outputPath);
     }
 
-    private string BuildUvxArguments(string inputFile, Job job, TranscriptionProfile profile, string outputDir)
+    private string BuildWhisperXArguments(string inputFile, Job job, TranscriptionProfile profile, string outputDir)
     {
         var args = new List<string>();
 
@@ -309,6 +411,31 @@ public class TranscriptionWorker : BackgroundService
         {
             args.Add($"--initial_prompt \"{initialPrompt}\"");
         }
+
+        return string.Join(" ", args);
+    }
+
+    private string BuildParakeetArguments(string inputFile, TranscriptionProfile profile, string outputDir)
+    {
+        var args = new List<string>();
+
+        // Use torch-backend for automatic CUDA detection
+        args.Add($"--torch-backend {_options.TorchBackend}");
+
+        // Install required packages and run the script
+        args.Add("--with \"nemo_toolkit[asr],librosa,soundfile\"");
+        args.Add("python");
+
+        // Resolve the script path (relative to uvx.exe directory)
+        var installDir = Path.GetDirectoryName(_options.UvxPath) ?? "";
+        var scriptPath = Path.Combine(installDir, _options.ParakeetScriptPath);
+        args.Add($"\"{scriptPath}\"");
+
+        // Parakeet script arguments
+        args.Add($"\"{inputFile}\"");
+        args.Add($"--output_dir \"{outputDir}\"");
+        args.Add($"--model {profile.ParakeetModel}");
+        args.Add($"--language {profile.Language}");
 
         return string.Join(" ", args);
     }
