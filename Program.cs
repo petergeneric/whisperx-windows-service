@@ -183,10 +183,21 @@ app.MapGet("/jobs/{id:guid}", (HttpRequest request, Guid id, JobManager jobManag
 
     return job.Status switch
     {
-        JobStatus.Queued or JobStatus.Processing => Results.Ok(new
+        JobStatus.Queued => Results.Ok(new
         {
             id = job.Id,
-            status = job.Status.ToString().ToLowerInvariant()
+            status = "queued"
+        }),
+        JobStatus.Processing => Results.Ok(new
+        {
+            id = job.Id,
+            status = "processing",
+            progress = job.ProgressStage != null ? new
+            {
+                stage = job.ProgressStage,
+                current = job.ProgressCurrent,
+                total = job.ProgressTotal
+            } : null
         }),
         JobStatus.Completed => Results.Ok(new
         {

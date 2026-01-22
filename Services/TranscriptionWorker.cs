@@ -97,7 +97,7 @@ public class TranscriptionWorker : BackgroundService
             // Dispatch based on engine type
             return profile.Engine.ToLowerInvariant() switch
             {
-                "parakeet" => await RunParakeetAsync(inputFile, profile, outputDir, stoppingToken),
+                "parakeet" => await RunParakeetAsync(inputFile, job, profile, outputDir, stoppingToken),
                 _ => await RunWhisperXAsync(inputFile, job, profile, outputDir, stoppingToken)
             };
         }
@@ -224,7 +224,7 @@ public class TranscriptionWorker : BackgroundService
         return JsonDocument.Parse(jsonContent);
     }
 
-    private async Task<JsonDocument> RunParakeetAsync(string inputFile, TranscriptionProfile profile, string outputDir, CancellationToken stoppingToken)
+    private async Task<JsonDocument> RunParakeetAsync(string inputFile, Job job, TranscriptionProfile profile, string outputDir, CancellationToken stoppingToken)
     {
         var arguments = BuildParakeetArguments(inputFile, profile, outputDir);
         _logger.LogDebug("Running: {Executable} {Arguments}", _options.UvxPath, arguments);
@@ -262,6 +262,10 @@ public class TranscriptionWorker : BackgroundService
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
 
+        // Regex patterns for progress parsing
+        var segmentCountPattern = new System.Text.RegularExpressions.Regex(@"Found (\d+) speech segments");
+        var processingPattern = new System.Text.RegularExpressions.Regex(@"Processing segment (\d+)/(\d+):");
+
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data != null)
@@ -277,6 +281,34 @@ public class TranscriptionWorker : BackgroundService
             {
                 stderr.AppendLine(e.Data);
                 _logger.LogDebug("[parakeet:err] {Output}", e.Data);
+
+                // Parse progress from stderr
+                if (e.Data.Contains("Running Silero VAD"))
+                {
+                    job.ProgressStage = "vad";
+                    job.ProgressCurrent = null;
+                    job.ProgressTotal = null;
+                }
+                else if (e.Data.Contains("Loading model:"))
+                {
+                    job.ProgressStage = "loading";
+                }
+                else
+                {
+                    var segmentMatch = segmentCountPattern.Match(e.Data);
+                    if (segmentMatch.Success)
+                    {
+                        job.ProgressTotal = int.Parse(segmentMatch.Groups[1].Value);
+                    }
+
+                    var processingMatch = processingPattern.Match(e.Data);
+                    if (processingMatch.Success)
+                    {
+                        job.ProgressStage = "transcribing";
+                        job.ProgressCurrent = int.Parse(processingMatch.Groups[1].Value);
+                        job.ProgressTotal = int.Parse(processingMatch.Groups[2].Value);
+                    }
+                }
             }
         };
 

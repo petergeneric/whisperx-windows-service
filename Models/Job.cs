@@ -22,4 +22,9 @@ public class Job
     public DateTime LastPolledAt { get; set; }
     public double? Temperature { get; init; }
     public string? InitialPrompt { get; init; }
+
+    // Progress tracking (for Parakeet jobs)
+    public string? ProgressStage { get; set; }  // "vad" or "transcribing"
+    public int? ProgressCurrent { get; set; }   // Current segment number
+    public int? ProgressTotal { get; set; }     // Total segments
 }
