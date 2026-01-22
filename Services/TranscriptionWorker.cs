@@ -82,9 +82,19 @@ public class TranscriptionWorker : BackgroundService
         var outputDir = Path.Combine(_options.TempDirectory, job.Id.ToString());
         Directory.CreateDirectory(outputDir);
 
+        // Convert .flac to .wav using ffmpeg with soxr resampler
+        string? convertedWavPath = null;
+        var inputFile = job.TempFilePath!;
+        if (Path.GetExtension(inputFile).Equals(".flac", StringComparison.OrdinalIgnoreCase))
+        {
+            convertedWavPath = Path.Combine(_options.TempDirectory, $"{job.Id}.wav");
+            await ConvertFlacToWavAsync(inputFile, convertedWavPath, stoppingToken);
+            inputFile = convertedWavPath;
+        }
+
         try
         {
-            var arguments = BuildUvxArguments(job.TempFilePath!, profile, outputDir);
+            var arguments = BuildUvxArguments(inputFile, job, profile, outputDir);
             _logger.LogDebug("Running: {Executable} {Arguments}", _options.UvxPath, arguments);
 
             // Get the directory containing uvx.exe (and ffmpeg.exe)
@@ -175,6 +185,20 @@ public class TranscriptionWorker : BackgroundService
         }
         finally
         {
+            // Clean up converted wav file if we created one
+            if (convertedWavPath != null && File.Exists(convertedWavPath))
+            {
+                try
+                {
+                    File.Delete(convertedWavPath);
+                    _logger.LogDebug("Deleted converted wav file {FilePath}", convertedWavPath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error deleting converted wav file {FilePath}", convertedWavPath);
+                }
+            }
+
             // Clean up output directory
             if (Directory.Exists(outputDir))
             {
@@ -190,7 +214,67 @@ public class TranscriptionWorker : BackgroundService
         }
     }
 
-    private string BuildUvxArguments(string inputFile, TranscriptionProfile profile, string outputDir)
+    private async Task ConvertFlacToWavAsync(string inputPath, string outputPath, CancellationToken stoppingToken)
+    {
+        var installDir = Path.GetDirectoryName(_options.UvxPath) ?? "";
+        var ffmpegPath = Path.Combine(installDir, "ffmpeg.exe");
+
+        if (!File.Exists(ffmpegPath))
+        {
+            ffmpegPath = "ffmpeg"; // Fall back to PATH
+        }
+
+        _logger.LogInformation("Converting {Input} to WAV using ffmpeg with soxr resampler", inputPath);
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                Arguments = $"-i \"{inputPath}\" -af \"aresample=resampler=soxr\" -ar 16000 -ac 1 -y \"{outputPath}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+
+        var stderr = new StringBuilder();
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stderr.AppendLine(e.Data);
+                _logger.LogDebug("[ffmpeg] {Output}", e.Data);
+            }
+        };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        while (!process.HasExited)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("Cancellation requested, killing ffmpeg process");
+                process.Kill(entireProcessTree: true);
+                throw new OperationCanceledException();
+            }
+            await Task.Delay(100, CancellationToken.None);
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None);
+
+        if (process.ExitCode != 0)
+        {
+            throw new Exception($"ffmpeg exited with code {process.ExitCode}: {stderr}");
+        }
+
+        _logger.LogInformation("Successfully converted to WAV: {Output}", outputPath);
+    }
+
+    private string BuildUvxArguments(string inputFile, Job job, TranscriptionProfile profile, string outputDir)
     {
         var args = new List<string>();
 
@@ -208,8 +292,23 @@ public class TranscriptionWorker : BackgroundService
         args.Add($"--language {profile.Language}");
         args.Add($"--align_model {profile.AlignModel}");
         args.Add($"--vad_method {profile.VadMethod}");
+        args.Add("--vad_filter True");
         args.Add("--output_format json");
         args.Add($"--output_dir \"{outputDir}\"");
+
+        // Temperature: job override takes precedence, then profile default
+        var temperature = job.Temperature ?? profile.Temperature;
+        if (temperature.HasValue)
+        {
+            args.Add($"--temperature {temperature.Value}");
+        }
+
+        // Initial prompt: job override takes precedence, then profile default
+        var initialPrompt = job.InitialPrompt ?? profile.InitialPrompt;
+        if (!string.IsNullOrEmpty(initialPrompt))
+        {
+            args.Add($"--initial_prompt \"{initialPrompt}\"");
+        }
 
         return string.Join(" ", args);
     }

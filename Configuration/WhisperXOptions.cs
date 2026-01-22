@@ -14,6 +14,9 @@ public class WhisperXOptions
     public string? ApiKey { get; init; }
     public Dictionary<string, TranscriptionProfile> Profiles { get; init; } = new()
     {
-        ["default"] = new TranscriptionProfile()
+        ["default"] = new TranscriptionProfile(),
+        ["large-v3"] = new TranscriptionProfile { Model = "large-v3" },
+        ["large-v2"] = new TranscriptionProfile { Model = "large-v2" },
+        ["distil-large-v3"] = new TranscriptionProfile { Model = "distil-large-v3" }
     };
 }

@@ -23,7 +23,7 @@ public class JobManager
         _logger = logger;
     }
 
-    public Job CreateJob(string profile, string tempFilePath)
+    public Job CreateJob(string profile, string tempFilePath, double? temperature = null, string? initialPrompt = null)
     {
         var job = new Job
         {
@@ -32,7 +32,9 @@ public class JobManager
             Profile = profile,
             TempFilePath = tempFilePath,
             CreatedAt = DateTime.UtcNow,
-            LastPolledAt = DateTime.UtcNow
+            LastPolledAt = DateTime.UtcNow,
+            Temperature = temperature,
+            InitialPrompt = initialPrompt
         };
 
         _jobs[job.Id] = job;

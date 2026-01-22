@@ -62,6 +62,8 @@ X-API-Key: <api-key>
 |-------|------|----------|-------------|
 | `file` | File | Yes | Audio file (`.wav` or `.flac`) |
 | `profile` | String | No | Transcription profile name (default: `"default"`) |
+| `temperature` | Number | No | Sampling temperature for transcription (overrides profile default) |
+| `initial_prompt` | String | No | Initial prompt to condition the transcription (overrides profile default) |
 
 #### Response
 
@@ -763,19 +765,29 @@ The API can be configured via `appsettings.json`:
         "AlignModel": "WAV2VEC2_ASR_LARGE_LV60K_960H",
         "VadMethod": "silero"
       },
-      "fast": {
-        "Model": "distil-small.en",
-        "Device": "cuda",
-        "ComputeType": "float16",
-        "Language": "en",
-        "AlignModel": "WAV2VEC2_ASR_LARGE_LV60K_960H",
-        "VadMethod": "silero"
+      "large-v3": {
+        "Model": "large-v3"
+      },
+      "large-v2": {
+        "Model": "large-v2"
+      },
+      "distil-large-v3": {
+        "Model": "distil-large-v3"
       }
     }
   },
   "Urls": "http://0.0.0.0:5173"
 }
 ```
+
+### Built-in Profiles
+
+| Profile | Model | Description |
+|---------|-------|-------------|
+| `default` | `distil-large-v3.5` | Fast distilled model, good balance of speed and accuracy |
+| `large-v3` | `large-v3` | Full model, best accuracy |
+| `large-v2` | `large-v2` | Previous full model version |
+| `distil-large-v3` | `distil-large-v3` | Distilled v3 model |
 
 ### Profile Options
 
@@ -787,3 +799,5 @@ The API can be configured via `appsettings.json`:
 | `Language` | Language code | `en`, `es`, `fr`, `de`, etc. |
 | `AlignModel` | Alignment model | `WAV2VEC2_ASR_LARGE_LV60K_960H` |
 | `VadMethod` | Voice activity detection | `silero`, `pyannote` |
+| `Temperature` | Sampling temperature | `0.0`, `0.2`, `0.8` |
+| `InitialPrompt` | Prompt to condition transcription | `"Technical vocabulary: API, SDK"` |

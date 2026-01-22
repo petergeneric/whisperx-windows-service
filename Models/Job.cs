@@ -20,4 +20,6 @@ public class Job
     public string? Error { get; set; }
     public DateTime CreatedAt { get; init; }
     public DateTime LastPolledAt { get; set; }
+    public double? Temperature { get; init; }
+    public string? InitialPrompt { get; init; }
 }

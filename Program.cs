@@ -104,6 +104,17 @@ app.MapPost("/jobs", async (HttpRequest request, JobManager jobManager, IOptions
         return Results.BadRequest(new { error = $"Unknown profile: {profile}" });
     }
 
+    // Get optional temperature parameter
+    double? temperature = null;
+    var temperatureStr = form["temperature"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(temperatureStr) && double.TryParse(temperatureStr, out var tempValue))
+    {
+        temperature = tempValue;
+    }
+
+    // Get optional initial_prompt parameter
+    var initialPrompt = form["initial_prompt"].FirstOrDefault();
+
     // Get file
     var file = form.Files.GetFile("file");
     if (file == null || file.Length == 0)
@@ -128,7 +139,7 @@ app.MapPost("/jobs", async (HttpRequest request, JobManager jobManager, IOptions
     }
 
     // Create job (this will generate a new ID, so we need to update our temp file)
-    var job = jobManager.CreateJob(profile, tempFilePath);
+    var job = jobManager.CreateJob(profile, tempFilePath, temperature, initialPrompt);
 
     // Rename file to match actual job ID
     var newTempFilePath = Path.Combine(opts.Value.TempDirectory, $"{job.Id}{extension}");

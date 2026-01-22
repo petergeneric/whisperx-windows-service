@@ -8,4 +8,6 @@ public class TranscriptionProfile
     public string Language { get; init; } = "en";
     public string AlignModel { get; init; } = "WAV2VEC2_ASR_LARGE_LV60K_960H";
     public string VadMethod { get; init; } = "silero";
+    public double? Temperature { get; init; }
+    public string? InitialPrompt { get; init; }
 }
