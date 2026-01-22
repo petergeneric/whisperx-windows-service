@@ -230,9 +230,28 @@ X-API-Key: <api-key>
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "processing"
+  "status": "processing",
+  "progress": null
 }
 ```
+
+**200 OK - Processing (Parakeet with progress)**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "processing",
+  "progress": {
+    "stage": "transcribing",
+    "current": 42,
+    "total": 847
+  }
+}
+```
+
+Progress stages for Parakeet jobs:
+- `"vad"` - Running Silero VAD speech detection
+- `"loading"` - Loading Parakeet model
+- `"transcribing"` - Processing speech segments (includes `current`/`total`)
 
 **200 OK - Completed**
 ```json
@@ -643,7 +662,21 @@ async function pollForResult(jobId) {
       setTimeout(() => pollForResult(jobId), 1000);
       break;
     case 'processing':
-      updateUI('Transcribing...');
+      // Show progress for Parakeet jobs
+      if (status.progress) {
+        const { stage, current, total } = status.progress;
+        if (stage === 'vad') {
+          updateUI('Detecting speech...');
+        } else if (stage === 'loading') {
+          updateUI('Loading model...');
+        } else if (stage === 'transcribing' && current && total) {
+          updateUI(`Transcribing segment ${current}/${total}...`);
+        } else {
+          updateUI('Processing...');
+        }
+      } else {
+        updateUI('Transcribing...');
+      }
       setTimeout(() => pollForResult(jobId), 1000);
       break;
     case 'completed':
@@ -827,4 +860,4 @@ The API can be configured via `appsettings.json`:
 |--------|-------------|---------|
 | `ParakeetModel` | NVIDIA Parakeet model | `nvidia/parakeet-tdt-0.6b-v3` |
 
-**Note:** Parakeet uses chunked processing (5-minute chunks with 5-second overlap) to handle multi-hour audio files reliably on GPUs with limited VRAM (e.g., 12GB RTX 4070).
+**Note:** Parakeet uses Silero VAD to detect speech segments first, then transcribes each segment individually. This ensures quieter speakers are not missed and provides real-time progress tracking via the `progress` field when polling.
