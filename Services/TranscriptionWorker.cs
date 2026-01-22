@@ -82,7 +82,7 @@ public class TranscriptionWorker : BackgroundService
         var outputDir = Path.Combine(_options.TempDirectory, job.Id.ToString());
         Directory.CreateDirectory(outputDir);
 
-        // Convert .flac to .wav using ffmpeg with soxr resampler (shared for all engines)
+        // Convert .flac to 16kHz mono .wav using ffmpeg (shared for all engines)
         string? convertedWavPath = null;
         var inputFile = job.TempFilePath!;
         if (Path.GetExtension(inputFile).Equals(".flac", StringComparison.OrdinalIgnoreCase))
@@ -326,14 +326,14 @@ public class TranscriptionWorker : BackgroundService
             ffmpegPath = "ffmpeg"; // Fall back to PATH
         }
 
-        _logger.LogInformation("Converting {Input} to WAV using ffmpeg with soxr resampler", inputPath);
+        _logger.LogInformation("Converting {Input} to 16kHz mono WAV using ffmpeg", inputPath);
 
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
                 FileName = ffmpegPath,
-                Arguments = $"-i \"{inputPath}\" -af \"aresample=resampler=soxr\" -ar 16000 -ac 1 -y \"{outputPath}\"",
+                Arguments = $"-i \"{inputPath}\" -ar 16000 -ac 1 -y \"{outputPath}\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
