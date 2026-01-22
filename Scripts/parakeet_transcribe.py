@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NVIDIA Parakeet transcription script with chunked processing for long audio."""
+"""NVIDIA Parakeet transcription script with Silero VAD for speech detection."""
 import argparse
 import gc
 import json
@@ -15,6 +15,49 @@ import nemo.collections.asr as nemo_asr
 # Segmentation parameters
 GAP_THRESHOLD = 0.4  # 400ms pause triggers new segment at word boundary
 MAX_SEGMENT_DURATION = 10.0  # Split segments longer than 10 seconds
+
+# VAD parameters
+MIN_SPEECH_DURATION_MS = 250  # Minimum speech segment duration
+MIN_SILENCE_DURATION_MS = 100  # Minimum silence to split segments
+
+
+def load_silero_vad():
+    """Load Silero VAD model from torch hub."""
+    model, utils = torch.hub.load(
+        repo_or_dir='snakers4/silero-vad',
+        model='silero_vad',
+        trust_repo=True,
+        verbose=False
+    )
+    get_speech_timestamps = utils[0]
+    return model, get_speech_timestamps
+
+
+def get_speech_segments(audio, sr, vad_model, get_speech_timestamps):
+    """Use Silero VAD to detect speech segments.
+
+    Args:
+        audio: Audio as numpy array
+        sr: Sample rate (should be 16000)
+        vad_model: Silero VAD model
+        get_speech_timestamps: Function from Silero utils
+
+    Returns:
+        List of dicts with 'start' and 'end' in samples
+    """
+    # Convert to tensor
+    audio_tensor = torch.from_numpy(audio).float()
+
+    # Get speech timestamps
+    speech_timestamps = get_speech_timestamps(
+        audio_tensor,
+        vad_model,
+        sampling_rate=sr,
+        min_speech_duration_ms=MIN_SPEECH_DURATION_MS,
+        min_silence_duration_ms=MIN_SILENCE_DURATION_MS,
+    )
+
+    return speech_timestamps
 
 
 def finalize_segment(words):
@@ -87,15 +130,18 @@ def build_segments_from_words(all_words, gap_threshold=GAP_THRESHOLD, max_durati
     return segments
 
 
-def transcribe_in_chunks(model, audio_path, output_dir, chunk_duration=300.0, overlap=5.0):
-    """Process audio in 5-minute chunks with 5-second overlap.
+def transcribe_with_vad(model, audio_path, output_dir, vad_model, get_speech_timestamps):
+    """Process audio using VAD-detected speech segments.
+
+    Each speech segment detected by Silero VAD is transcribed individually,
+    ensuring quieter speech gets full model attention.
 
     Args:
         model: NeMo ASR model
         audio_path: Path to input audio file
         output_dir: Directory for temporary chunk files
-        chunk_duration: Duration of each chunk in seconds (default: 300 = 5 minutes)
-        overlap: Overlap between chunks in seconds (default: 5)
+        vad_model: Silero VAD model
+        get_speech_timestamps: Function from Silero utils
 
     Returns:
         dict with 'segments' list in WhisperX-compatible format
@@ -104,35 +150,39 @@ def transcribe_in_chunks(model, audio_path, output_dir, chunk_duration=300.0, ov
     total_duration = len(audio) / sr
     print(f"Audio duration: {total_duration/60:.1f} minutes ({total_duration/3600:.2f} hours)", file=sys.stderr)
 
-    chunk_samples = int(chunk_duration * sr)
-    overlap_samples = int(overlap * sr)
-    stride_samples = chunk_samples - overlap_samples
+    # Detect speech segments with Silero VAD
+    print("Running Silero VAD...", file=sys.stderr)
+    speech_segments = get_speech_segments(audio, sr, vad_model, get_speech_timestamps)
+    print(f"Found {len(speech_segments)} speech segments", file=sys.stderr)
+
+    if not speech_segments:
+        print("No speech detected!", file=sys.stderr)
+        return {"segments": [], "language": "en"}
 
     all_words = []
-    start_sample = 0
-    chunk_num = 0
     temp_dir = Path(output_dir)
 
-    while start_sample < len(audio):
-        chunk_num += 1
-        end_sample = min(start_sample + chunk_samples, len(audio))
-        chunk = audio[start_sample:end_sample]
-        chunk_offset = start_sample / sr
+    for i, seg in enumerate(speech_segments):
+        start_sample = seg['start']
+        end_sample = seg['end']
+        segment_audio = audio[start_sample:end_sample]
+        segment_offset = start_sample / sr  # Time offset for this segment
 
-        # Write temp chunk
-        temp_path = temp_dir / f"_chunk_{chunk_num}.wav"
-        sf.write(str(temp_path), chunk, sr)
-
+        segment_duration = (end_sample - start_sample) / sr
         start_time = start_sample / sr
         end_time = end_sample / sr
-        print(f"Processing chunk {chunk_num}: {start_time/60:.1f} - {end_time/60:.1f} min", end="", flush=True, file=sys.stderr)
+
+        print(f"Processing segment {i+1}/{len(speech_segments)}: {start_time:.1f}s - {end_time:.1f}s ({segment_duration:.1f}s)", end="", flush=True, file=sys.stderr)
+
+        # Write temp segment
+        temp_path = temp_dir / f"_segment_{i+1}.wav"
+        sf.write(str(temp_path), segment_audio, sr)
 
         # Transcribe with timestamps
         output = model.transcribe([str(temp_path)], timestamps=True)
 
         # Handle the transcription output structure
-        # NeMo returns a list of hypotheses, each with timestamp info
-        chunk_words = 0
+        segment_words = 0
         if output and len(output) > 0:
             hypothesis = output[0]
 
@@ -144,12 +194,12 @@ def transcribe_in_chunks(model, audio_path, output_dir, chunk_duration=300.0, ov
             for w in word_timestamps:
                 word = {
                     "text": w.get('word', ''),
-                    "start": round(w.get('start', 0) + chunk_offset, 3),
-                    "end": round(w.get('end', 0) + chunk_offset, 3),
+                    "start": round(w.get('start', 0) + segment_offset, 3),
+                    "end": round(w.get('end', 0) + segment_offset, 3),
                     "confidence": round(w.get('confidence', 1.0), 4),
                 }
                 all_words.append(word)
-                chunk_words += 1
+                segment_words += 1
 
         # Cleanup temp file
         try:
@@ -161,20 +211,18 @@ def transcribe_in_chunks(model, audio_path, output_dir, chunk_duration=300.0, ov
         torch.cuda.empty_cache()
         gc.collect()
 
-        print(f" -> {chunk_words} tokens", file=sys.stderr)
-
-        start_sample += stride_samples
+        print(f" -> {segment_words} words", file=sys.stderr)
 
     # Build segments using pause-based detection
     segments = build_segments_from_words(all_words)
 
-    print(f"Built {len(segments)} segments from {len(all_words)} tokens", file=sys.stderr)
+    print(f"Built {len(segments)} output segments from {len(all_words)} words", file=sys.stderr)
 
     return {"segments": segments, "language": "en"}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Transcribe audio using NVIDIA Parakeet")
+    parser = argparse.ArgumentParser(description="Transcribe audio using NVIDIA Parakeet with Silero VAD")
     parser.add_argument("input_file", help="Path to input audio file")
     parser.add_argument("--output_dir", required=True, help="Directory for output JSON")
     parser.add_argument("--model", default="nvidia/parakeet-tdt-0.6b-v3",
@@ -190,11 +238,14 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print("Loading Silero VAD...", file=sys.stderr)
+    vad_model, get_speech_timestamps = load_silero_vad()
+
     print(f"Loading model: {args.model}", file=sys.stderr)
     model = nemo_asr.models.ASRModel.from_pretrained(args.model)
 
     print(f"Transcribing: {args.input_file}", file=sys.stderr)
-    result = transcribe_in_chunks(model, args.input_file, args.output_dir)
+    result = transcribe_with_vad(model, args.input_file, args.output_dir, vad_model, get_speech_timestamps)
     result["language"] = args.language
 
     # Write output JSON (same naming convention as WhisperX)
