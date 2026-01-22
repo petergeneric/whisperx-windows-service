@@ -394,7 +394,6 @@ public class TranscriptionWorker : BackgroundService
         args.Add($"--language {profile.Language}");
         args.Add($"--align_model {profile.AlignModel}");
         args.Add($"--vad_method {profile.VadMethod}");
-        args.Add("--vad_filter True");
         args.Add("--output_format json");
         args.Add($"--output_dir \"{outputDir}\"");
 
