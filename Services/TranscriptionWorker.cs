@@ -421,8 +421,15 @@ public class TranscriptionWorker : BackgroundService
         // Use torch-backend for automatic CUDA detection
         args.Add($"--torch-backend {_options.TorchBackend}");
 
+        // Use system Python 3.11 which includes development headers for C extension compilation
+        // (UV's managed Python lacks Python.h needed by editdistance/texterrors)
+        args.Add("--python-preference system");
+        args.Add("--python 3.11");
+
         // Install required packages and run the script
-        args.Add("--with \"nemo_toolkit[asr],librosa,soundfile\"");
+        // Requires Visual C++ Build Tools on Windows for editdistance/texterrors compilation
+        // Use >=2.3.0 for Windows SIGKILL fix, <2.6.0 to avoid Lhotse dataloader issues
+        args.Add("--with \"nemo_toolkit[asr]>=2.3.0,<2.6.0,librosa,soundfile\"");
         args.Add("python");
 
         // Resolve the script path (relative to uvx.exe directory)
