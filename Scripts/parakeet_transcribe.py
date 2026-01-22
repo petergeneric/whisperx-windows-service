@@ -19,7 +19,7 @@ MAX_SEGMENT_DURATION = 10.0  # Split segments longer than 10 seconds
 
 def finalize_segment(words):
     """Convert a list of word tokens into a segment dict."""
-    text = "".join(w["text"] for w in words).strip()
+    text = " ".join(w["text"].strip() for w in words)
     # Convert internal word format to WhisperX-compatible format
     whisperx_words = [
         {
@@ -64,16 +64,13 @@ def build_segments_from_words(all_words, gap_threshold=GAP_THRESHOLD, max_durati
         curr_word = all_words[i]
 
         gap = curr_word["start"] - prev_word["end"]
-        starts_with_space = curr_word["text"].startswith(" ")
         segment_duration = prev_word["end"] - segment_start_time
 
         # Break segment on:
-        # 1. Pause at word boundary (gap > threshold AND starts with space)
-        # 2. Duration exceeds max AND we're at a word boundary (starts with space)
-        should_break = (
-            (gap > gap_threshold and starts_with_space) or
-            (segment_duration > max_duration and starts_with_space)
-        )
+        # 1. Pause exceeds gap threshold (400ms default)
+        # 2. Duration exceeds max (10s default)
+        # Note: NeMo returns individual words (not subword tokens), so every word is a valid break point
+        should_break = (gap > gap_threshold) or (segment_duration > max_duration)
 
         if should_break:
             # Finalize current segment
