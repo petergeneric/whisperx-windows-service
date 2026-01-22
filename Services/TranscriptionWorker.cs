@@ -429,7 +429,8 @@ public class TranscriptionWorker : BackgroundService
         // Install required packages and run the script
         // Requires Visual C++ Build Tools on Windows for editdistance/texterrors compilation
         // Use >=2.3.0 for Windows SIGKILL fix, <2.6.0 to avoid Lhotse dataloader issues
-        args.Add("--with \"nemo_toolkit[asr]>=2.3.0,<2.6.0,librosa,soundfile\"");
+        // torchaudio required for Silero VAD
+        args.Add("--with \"nemo_toolkit[asr]>=2.3.0,<2.6.0,librosa,soundfile,torchaudio\"");
         args.Add("python");
 
         // Resolve the script path (relative to uvx.exe directory)
