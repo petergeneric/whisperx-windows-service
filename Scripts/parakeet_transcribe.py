@@ -12,13 +12,18 @@ import soundfile as sf
 import nemo.collections.asr as nemo_asr
 
 
-# Segmentation parameters
+# Segmentation parameters (for building output segments from words)
 GAP_THRESHOLD = 0.4  # 400ms pause triggers new segment at word boundary
 MAX_SEGMENT_DURATION = 10.0  # Split segments longer than 10 seconds
 
 # VAD parameters
 MIN_SPEECH_DURATION_MS = 250  # Minimum speech segment duration
 MIN_SILENCE_DURATION_MS = 100  # Minimum silence to split segments
+
+# VAD chunk merging defaults (can be overridden via CLI args)
+DEFAULT_VAD_MERGE_GAP = 10.0  # Merge segments with gaps < 10 seconds
+DEFAULT_VAD_MAX_CHUNK = 300.0  # Maximum chunk duration (5 minutes)
+DEFAULT_VAD_SPLIT_GAP = 0.5  # Minimum gap to split at when exceeding max (500ms)
 
 
 def load_silero_vad():
@@ -58,6 +63,90 @@ def get_speech_segments(audio, sr, vad_model, get_speech_timestamps):
     )
 
     return speech_timestamps
+
+
+def merge_vad_segments(speech_segments, sr, merge_gap=DEFAULT_VAD_MERGE_GAP,
+                       max_chunk=DEFAULT_VAD_MAX_CHUNK, split_gap=DEFAULT_VAD_SPLIT_GAP):
+    """Merge VAD segments into larger chunks for more efficient processing.
+
+    Args:
+        speech_segments: List of dicts with 'start' and 'end' in samples
+        sr: Sample rate (16000)
+        merge_gap: Merge segments if gap between them is less than this (seconds)
+        max_chunk: Maximum chunk duration (seconds)
+        split_gap: Minimum gap to split at when chunk exceeds max_chunk (seconds)
+
+    Returns:
+        List of dicts with 'start' and 'end' in samples, representing merged chunks
+    """
+    if not speech_segments:
+        return []
+
+    merge_gap_samples = int(merge_gap * sr)
+    max_chunk_samples = int(max_chunk * sr)
+    split_gap_samples = int(split_gap * sr)
+
+    # First pass: merge segments with gaps < merge_gap
+    merged = []
+    current_chunk = {'start': speech_segments[0]['start'], 'end': speech_segments[0]['end']}
+
+    for seg in speech_segments[1:]:
+        gap = seg['start'] - current_chunk['end']
+
+        if gap < merge_gap_samples:
+            # Merge: extend current chunk to include this segment
+            current_chunk['end'] = seg['end']
+        else:
+            # Gap too large: finalize current chunk, start new one
+            merged.append(current_chunk)
+            current_chunk = {'start': seg['start'], 'end': seg['end']}
+
+    merged.append(current_chunk)
+
+    # Second pass: split chunks that exceed max_chunk at gaps >= split_gap
+    # We need to go back to original segments to find split points
+    final_chunks = []
+
+    for chunk in merged:
+        chunk_duration = chunk['end'] - chunk['start']
+
+        if chunk_duration <= max_chunk_samples:
+            final_chunks.append(chunk)
+            continue
+
+        # Find original segments within this chunk
+        segments_in_chunk = [
+            seg for seg in speech_segments
+            if seg['start'] >= chunk['start'] and seg['end'] <= chunk['end']
+        ]
+
+        if len(segments_in_chunk) <= 1:
+            # Single long segment, can't split - just use as is
+            final_chunks.append(chunk)
+            continue
+
+        # Build sub-chunks by accumulating segments until we hit max or find a good split point
+        sub_chunk_start = segments_in_chunk[0]['start']
+        sub_chunk_end = segments_in_chunk[0]['end']
+
+        for i in range(1, len(segments_in_chunk)):
+            seg = segments_in_chunk[i]
+            gap = seg['start'] - sub_chunk_end
+            potential_duration = seg['end'] - sub_chunk_start
+
+            # If adding this segment would exceed max AND we have a suitable gap, split here
+            if potential_duration > max_chunk_samples and gap >= split_gap_samples:
+                final_chunks.append({'start': sub_chunk_start, 'end': sub_chunk_end})
+                sub_chunk_start = seg['start']
+                sub_chunk_end = seg['end']
+            else:
+                # Add segment to current sub-chunk
+                sub_chunk_end = seg['end']
+
+        # Don't forget the last sub-chunk
+        final_chunks.append({'start': sub_chunk_start, 'end': sub_chunk_end})
+
+    return final_chunks
 
 
 def finalize_segment(words):
@@ -130,11 +219,14 @@ def build_segments_from_words(all_words, gap_threshold=GAP_THRESHOLD, max_durati
     return segments
 
 
-def transcribe_with_vad(model, audio_path, output_dir, vad_model, get_speech_timestamps):
-    """Process audio using VAD-detected speech segments.
+def transcribe_with_vad(model, audio_path, output_dir, vad_model, get_speech_timestamps,
+                        vad_merge_gap=DEFAULT_VAD_MERGE_GAP, vad_max_chunk=DEFAULT_VAD_MAX_CHUNK,
+                        vad_split_gap=DEFAULT_VAD_SPLIT_GAP):
+    """Process audio using VAD-detected speech segments with optional merging.
 
-    Each speech segment detected by Silero VAD is transcribed individually,
-    ensuring quieter speech gets full model attention.
+    Speech segments detected by Silero VAD can be merged into larger chunks
+    for more efficient processing, while still ensuring quieter speakers
+    get appropriate attention.
 
     Args:
         model: NeMo ASR model
@@ -142,6 +234,9 @@ def transcribe_with_vad(model, audio_path, output_dir, vad_model, get_speech_tim
         output_dir: Directory for temporary chunk files
         vad_model: Silero VAD model
         get_speech_timestamps: Function from Silero utils
+        vad_merge_gap: Merge segments with gaps less than this (seconds, default: 10)
+        vad_max_chunk: Maximum chunk duration (seconds, default: 300 = 5 minutes)
+        vad_split_gap: Minimum gap to split at when exceeding max (seconds, default: 0.5)
 
     Returns:
         dict with 'segments' list in WhisperX-compatible format
@@ -153,36 +248,40 @@ def transcribe_with_vad(model, audio_path, output_dir, vad_model, get_speech_tim
     # Detect speech segments with Silero VAD
     print("Running Silero VAD...", file=sys.stderr)
     speech_segments = get_speech_segments(audio, sr, vad_model, get_speech_timestamps)
-    print(f"Found {len(speech_segments)} speech segments", file=sys.stderr)
+    print(f"Found {len(speech_segments)} raw VAD segments", file=sys.stderr)
 
-    if not speech_segments:
+    # Merge segments into chunks based on parameters
+    chunks = merge_vad_segments(speech_segments, sr, vad_merge_gap, vad_max_chunk, vad_split_gap)
+    print(f"Merged into {len(chunks)} chunks (merge_gap={vad_merge_gap}s, max_chunk={vad_max_chunk}s, split_gap={vad_split_gap}s)", file=sys.stderr)
+
+    if not chunks:
         print("No speech detected!", file=sys.stderr)
         return {"segments": [], "language": "en"}
 
     all_words = []
     temp_dir = Path(output_dir)
 
-    for i, seg in enumerate(speech_segments):
-        start_sample = seg['start']
-        end_sample = seg['end']
-        segment_audio = audio[start_sample:end_sample]
-        segment_offset = start_sample / sr  # Time offset for this segment
+    for i, chunk in enumerate(chunks):
+        start_sample = chunk['start']
+        end_sample = chunk['end']
+        chunk_audio = audio[start_sample:end_sample]
+        chunk_offset = start_sample / sr  # Time offset for this chunk
 
-        segment_duration = (end_sample - start_sample) / sr
+        chunk_duration = (end_sample - start_sample) / sr
         start_time = start_sample / sr
         end_time = end_sample / sr
 
-        print(f"Processing segment {i+1}/{len(speech_segments)}: {start_time:.1f}s - {end_time:.1f}s ({segment_duration:.1f}s)", end="", flush=True, file=sys.stderr)
+        print(f"Processing chunk {i+1}/{len(chunks)}: {start_time:.1f}s - {end_time:.1f}s ({chunk_duration:.1f}s)", end="", flush=True, file=sys.stderr)
 
-        # Write temp segment
-        temp_path = temp_dir / f"_segment_{i+1}.wav"
-        sf.write(str(temp_path), segment_audio, sr)
+        # Write temp chunk
+        temp_path = temp_dir / f"_chunk_{i+1}.wav"
+        sf.write(str(temp_path), chunk_audio, sr)
 
         # Transcribe with timestamps
         output = model.transcribe([str(temp_path)], timestamps=True)
 
         # Handle the transcription output structure
-        segment_words = 0
+        chunk_words = 0
         if output and len(output) > 0:
             hypothesis = output[0]
 
@@ -194,12 +293,12 @@ def transcribe_with_vad(model, audio_path, output_dir, vad_model, get_speech_tim
             for w in word_timestamps:
                 word = {
                     "text": w.get('word', ''),
-                    "start": round(w.get('start', 0) + segment_offset, 3),
-                    "end": round(w.get('end', 0) + segment_offset, 3),
+                    "start": round(w.get('start', 0) + chunk_offset, 3),
+                    "end": round(w.get('end', 0) + chunk_offset, 3),
                     "confidence": round(w.get('confidence', 1.0), 4),
                 }
                 all_words.append(word)
-                segment_words += 1
+                chunk_words += 1
 
         # Cleanup temp file
         try:
@@ -211,7 +310,7 @@ def transcribe_with_vad(model, audio_path, output_dir, vad_model, get_speech_tim
         torch.cuda.empty_cache()
         gc.collect()
 
-        print(f" -> {segment_words} words", file=sys.stderr)
+        print(f" -> {chunk_words} words", file=sys.stderr)
 
     # Build segments using pause-based detection
     segments = build_segments_from_words(all_words)
@@ -228,6 +327,12 @@ def main():
     parser.add_argument("--model", default="nvidia/parakeet-tdt-0.6b-v3",
                         help="Parakeet model name (default: nvidia/parakeet-tdt-0.6b-v3)")
     parser.add_argument("--language", default="en", help="Language code (default: en)")
+    parser.add_argument("--vad_merge_gap", type=float, default=DEFAULT_VAD_MERGE_GAP,
+                        help=f"Merge VAD segments with gaps less than this (seconds, default: {DEFAULT_VAD_MERGE_GAP})")
+    parser.add_argument("--vad_max_chunk", type=float, default=DEFAULT_VAD_MAX_CHUNK,
+                        help=f"Maximum chunk duration (seconds, default: {DEFAULT_VAD_MAX_CHUNK})")
+    parser.add_argument("--vad_split_gap", type=float, default=DEFAULT_VAD_SPLIT_GAP,
+                        help=f"Minimum gap to split at when exceeding max chunk (seconds, default: {DEFAULT_VAD_SPLIT_GAP})")
     args = parser.parse_args()
 
     input_path = Path(args.input_file)
@@ -245,7 +350,12 @@ def main():
     model = nemo_asr.models.ASRModel.from_pretrained(args.model)
 
     print(f"Transcribing: {args.input_file}", file=sys.stderr)
-    result = transcribe_with_vad(model, args.input_file, args.output_dir, vad_model, get_speech_timestamps)
+    result = transcribe_with_vad(
+        model, args.input_file, args.output_dir, vad_model, get_speech_timestamps,
+        vad_merge_gap=args.vad_merge_gap,
+        vad_max_chunk=args.vad_max_chunk,
+        vad_split_gap=args.vad_split_gap
+    )
     result["language"] = args.language
 
     # Write output JSON (same naming convention as WhisperX)

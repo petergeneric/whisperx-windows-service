@@ -226,7 +226,7 @@ public class TranscriptionWorker : BackgroundService
 
     private async Task<JsonDocument> RunParakeetAsync(string inputFile, Job job, TranscriptionProfile profile, string outputDir, CancellationToken stoppingToken)
     {
-        var arguments = BuildParakeetArguments(inputFile, profile, outputDir);
+        var arguments = BuildParakeetArguments(inputFile, job, profile, outputDir);
         _logger.LogDebug("Running: {Executable} {Arguments}", _options.UvxPath, arguments);
 
         // Get the directory containing uvx.exe
@@ -263,8 +263,8 @@ public class TranscriptionWorker : BackgroundService
         var stderr = new StringBuilder();
 
         // Regex patterns for progress parsing
-        var segmentCountPattern = new System.Text.RegularExpressions.Regex(@"Found (\d+) speech segments");
-        var processingPattern = new System.Text.RegularExpressions.Regex(@"Processing segment (\d+)/(\d+):");
+        var chunkCountPattern = new System.Text.RegularExpressions.Regex(@"Merged into (\d+) chunks");
+        var processingPattern = new System.Text.RegularExpressions.Regex(@"Processing chunk (\d+)/(\d+):");
 
         process.OutputDataReceived += (_, e) =>
         {
@@ -295,10 +295,10 @@ public class TranscriptionWorker : BackgroundService
                 }
                 else
                 {
-                    var segmentMatch = segmentCountPattern.Match(e.Data);
-                    if (segmentMatch.Success)
+                    var chunkMatch = chunkCountPattern.Match(e.Data);
+                    if (chunkMatch.Success)
                     {
-                        job.ProgressTotal = int.Parse(segmentMatch.Groups[1].Value);
+                        job.ProgressTotal = int.Parse(chunkMatch.Groups[1].Value);
                     }
 
                     var processingMatch = processingPattern.Match(e.Data);
@@ -446,7 +446,7 @@ public class TranscriptionWorker : BackgroundService
         return string.Join(" ", args);
     }
 
-    private string BuildParakeetArguments(string inputFile, TranscriptionProfile profile, string outputDir)
+    private string BuildParakeetArguments(string inputFile, Job job, TranscriptionProfile profile, string outputDir)
     {
         var args = new List<string>();
 
@@ -475,6 +475,20 @@ public class TranscriptionWorker : BackgroundService
         args.Add($"--output_dir \"{outputDir}\"");
         args.Add($"--model {profile.ParakeetModel}");
         args.Add($"--language {profile.Language}");
+
+        // VAD chunking parameters (job override takes precedence)
+        if (job.VadMergeGap.HasValue)
+        {
+            args.Add($"--vad_merge_gap {job.VadMergeGap.Value}");
+        }
+        if (job.VadMaxChunk.HasValue)
+        {
+            args.Add($"--vad_max_chunk {job.VadMaxChunk.Value}");
+        }
+        if (job.VadSplitGap.HasValue)
+        {
+            args.Add($"--vad_split_gap {job.VadSplitGap.Value}");
+        }
 
         return string.Join(" ", args);
     }

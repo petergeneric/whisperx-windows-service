@@ -23,7 +23,8 @@ public class JobManager
         _logger = logger;
     }
 
-    public Job CreateJob(string profile, string tempFilePath, double? temperature = null, string? initialPrompt = null)
+    public Job CreateJob(string profile, string tempFilePath, double? temperature = null, string? initialPrompt = null,
+                         double? vadMergeGap = null, double? vadMaxChunk = null, double? vadSplitGap = null)
     {
         var job = new Job
         {
@@ -34,7 +35,10 @@ public class JobManager
             CreatedAt = DateTime.UtcNow,
             LastPolledAt = DateTime.UtcNow,
             Temperature = temperature,
-            InitialPrompt = initialPrompt
+            InitialPrompt = initialPrompt,
+            VadMergeGap = vadMergeGap,
+            VadMaxChunk = vadMaxChunk,
+            VadSplitGap = vadSplitGap
         };
 
         _jobs[job.Id] = job;

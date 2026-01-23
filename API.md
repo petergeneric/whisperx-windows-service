@@ -64,6 +64,9 @@ X-API-Key: <api-key>
 | `profile` | String | No | Transcription profile name (default: `"default"`) |
 | `temperature` | Number | No | Sampling temperature for transcription (overrides profile default) |
 | `initial_prompt` | String | No | Initial prompt to condition the transcription (overrides profile default) |
+| `vad_merge_gap` | Number | No | (Parakeet only) Merge VAD segments with gaps less than this (seconds, default: 10) |
+| `vad_max_chunk` | Number | No | (Parakeet only) Maximum chunk duration (seconds, default: 300 = 5 minutes) |
+| `vad_split_gap` | Number | No | (Parakeet only) Minimum gap to split at when exceeding max chunk (seconds, default: 0.5) |
 
 #### Response
 
@@ -251,7 +254,7 @@ X-API-Key: <api-key>
 Progress stages for Parakeet jobs:
 - `"vad"` - Running Silero VAD speech detection
 - `"loading"` - Loading Parakeet model
-- `"transcribing"` - Processing speech segments (includes `current`/`total`)
+- `"transcribing"` - Processing audio chunks (includes `current`/`total`)
 
 **200 OK - Completed**
 ```json
@@ -670,7 +673,7 @@ async function pollForResult(jobId) {
         } else if (stage === 'loading') {
           updateUI('Loading model...');
         } else if (stage === 'transcribing' && current && total) {
-          updateUI(`Transcribing segment ${current}/${total}...`);
+          updateUI(`Transcribing chunk ${current}/${total}...`);
         } else {
           updateUI('Processing...');
         }
@@ -860,4 +863,23 @@ The API can be configured via `appsettings.json`:
 |--------|-------------|---------|
 | `ParakeetModel` | NVIDIA Parakeet model | `nvidia/parakeet-tdt-0.6b-v3` |
 
-**Note:** Parakeet uses Silero VAD to detect speech segments first, then transcribes each segment individually. This ensures quieter speakers are not missed and provides real-time progress tracking via the `progress` field when polling.
+**Note:** Parakeet uses Silero VAD to detect speech segments, then merges them into larger chunks for efficient processing while preserving accuracy for quieter speakers.
+
+##### VAD Chunking Parameters
+
+By default, Parakeet merges VAD segments with gaps less than 10 seconds into chunks up to 5 minutes long. If a chunk would exceed 5 minutes, it splits at the next gap of at least 500ms. These defaults balance transcription efficiency with accuracy.
+
+You can override these per-job via the request parameters:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `vad_merge_gap` | 10 | Merge segments with gaps shorter than this (seconds) |
+| `vad_max_chunk` | 300 | Maximum chunk duration before forcing a split (seconds) |
+| `vad_split_gap` | 0.5 | Minimum gap required to split a chunk (seconds) |
+
+**Examples:**
+- For speakers who talk infrequently (one line every few minutes), use smaller `vad_merge_gap` (e.g., 2-5 seconds) to keep their speech isolated
+- For continuous conversation, use the defaults to batch efficiently
+- For maximum accuracy with quieter speakers, set `vad_merge_gap=0` to process each VAD segment individually (slower but most accurate)
+
+Progress tracking shows chunks being processed via the `progress` field when polling.

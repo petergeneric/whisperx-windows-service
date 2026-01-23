@@ -23,6 +23,11 @@ public class Job
     public double? Temperature { get; init; }
     public string? InitialPrompt { get; init; }
 
+    // VAD chunking parameters (for Parakeet jobs)
+    public double? VadMergeGap { get; init; }   // Merge segments with gaps less than this (seconds)
+    public double? VadMaxChunk { get; init; }   // Maximum chunk duration (seconds)
+    public double? VadSplitGap { get; init; }   // Minimum gap to split at when exceeding max (seconds)
+
     // Progress tracking (for Parakeet jobs)
     public string? ProgressStage { get; set; }  // "vad" or "transcribing"
     public int? ProgressCurrent { get; set; }   // Current segment number

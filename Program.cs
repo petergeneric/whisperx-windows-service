@@ -115,6 +115,28 @@ app.MapPost("/jobs", async (HttpRequest request, JobManager jobManager, IOptions
     // Get optional initial_prompt parameter
     var initialPrompt = form["initial_prompt"].FirstOrDefault();
 
+    // Get optional VAD chunking parameters (for Parakeet)
+    double? vadMergeGap = null;
+    var vadMergeGapStr = form["vad_merge_gap"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(vadMergeGapStr) && double.TryParse(vadMergeGapStr, out var mergeGapValue))
+    {
+        vadMergeGap = mergeGapValue;
+    }
+
+    double? vadMaxChunk = null;
+    var vadMaxChunkStr = form["vad_max_chunk"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(vadMaxChunkStr) && double.TryParse(vadMaxChunkStr, out var maxChunkValue))
+    {
+        vadMaxChunk = maxChunkValue;
+    }
+
+    double? vadSplitGap = null;
+    var vadSplitGapStr = form["vad_split_gap"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(vadSplitGapStr) && double.TryParse(vadSplitGapStr, out var splitGapValue))
+    {
+        vadSplitGap = splitGapValue;
+    }
+
     // Get file
     var file = form.Files.GetFile("file");
     if (file == null || file.Length == 0)
@@ -139,7 +161,7 @@ app.MapPost("/jobs", async (HttpRequest request, JobManager jobManager, IOptions
     }
 
     // Create job (this will generate a new ID, so we need to update our temp file)
-    var job = jobManager.CreateJob(profile, tempFilePath, temperature, initialPrompt);
+    var job = jobManager.CreateJob(profile, tempFilePath, temperature, initialPrompt, vadMergeGap, vadMaxChunk, vadSplitGap);
 
     // Rename file to match actual job ID
     var newTempFilePath = Path.Combine(opts.Value.TempDirectory, $"{job.Id}{extension}");
